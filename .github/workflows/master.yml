@@ -17,4 +17,5 @@ jobs:
         with:
           toolchain: stable
           components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
       - run: ./ci.sh
