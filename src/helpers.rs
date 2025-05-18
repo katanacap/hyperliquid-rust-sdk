@@ -1,8 +1,8 @@
-use crate::{consts::*, prelude::*, Error};
+use crate::consts::*;
 use chrono::prelude::Utc;
 use lazy_static::lazy_static;
 use log::info;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
 
@@ -51,12 +51,10 @@ pub(crate) fn uuid_to_hex_string(uuid: Uuid) -> String {
     format!("0x{}", hex_string)
 }
 
-pub(crate) fn generate_random_key() -> Result<[u8; 32]> {
+pub(crate) fn generate_random_key() -> [u8; 32] {
     let mut arr = [0u8; 32];
-    thread_rng()
-        .try_fill(&mut arr[..])
-        .map_err(|e| Error::RandGen(e.to_string()))?;
-    Ok(arr)
+    rng().fill(&mut arr[..]);
+    arr
 }
 
 pub fn truncate_float(float: f64, decimals: u32, round_up: bool) -> f64 {

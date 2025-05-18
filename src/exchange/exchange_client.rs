@@ -626,7 +626,7 @@ impl ExchangeClient {
         wallet: Option<&LocalWallet>,
     ) -> Result<(String, ExchangeResponseStatus)> {
         let wallet = wallet.unwrap_or(&self.wallet);
-        let key = H256::from(generate_random_key()?).encode_hex()[2..].to_string();
+        let key = H256::from(generate_random_key()).encode_hex()[2..].to_string();
 
         let address = key
             .parse::<LocalWallet>()
