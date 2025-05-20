@@ -1,4 +1,3 @@
-use ethers::types::H160;
 use hyperliquid_rust_sdk::{BaseUrl, InfoClient};
 use log::info;
 
