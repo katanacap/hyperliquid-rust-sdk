@@ -7,8 +7,8 @@ use crate::{
     prelude::*,
     req::HttpClient,
     ws::{Subscription, WsManager},
-    BaseUrl, Error, Message, OrderStatusResponse, ReferralResponse, UserFeesResponse,
-    UserFundingResponse, UserTokenBalanceResponse,
+    BaseUrl, Error, Message, MetaAndAssetCtxs, OrderStatusResponse, ReferralResponse,
+    UserFeesResponse, UserFundingResponse, UserTokenBalanceResponse,
 };
 
 use ethers::types::H160;
@@ -53,6 +53,7 @@ pub enum InfoRequest {
         oid: u64,
     },
     Meta,
+    MetaAndAssetCtxs,
     SpotMeta,
     SpotMetaAndAssetCtxs,
     AllMids,
@@ -202,6 +203,11 @@ impl InfoClient {
 
     pub async fn meta(&self) -> Result<Meta> {
         let input = InfoRequest::Meta;
+        self.send_info_request(input).await
+    }
+
+    pub async fn meta_and_asset_contexts(&self) -> Result<Vec<MetaAndAssetCtxs>> {
+        let input = InfoRequest::MetaAndAssetCtxs;
         self.send_info_request(input).await
     }
 

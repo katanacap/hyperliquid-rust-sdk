@@ -45,6 +45,32 @@ impl SpotMeta {
     }
 }
 
+// --- perp ---
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum MetaAndAssetCtxs {
+    Meta(Meta),
+    AssetCtxs(Vec<AssetContext>),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetContext {
+    pub funding: String,
+    pub open_interest: String,
+    pub prev_day_px: String,
+    pub day_ntl_vlm: String,
+    pub premium: Option<String>,
+    pub oracle_px: String,
+    pub mark_px: String,
+    pub mid_px: Option<String>,
+    pub impact_pxs: Option<Vec<String>>,
+    pub day_base_vlm: String,
+}
+
+// --- spot ---
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum SpotMetaAndAssetCtxs {
@@ -68,6 +94,9 @@ pub struct SpotAssetContext {
 pub struct AssetMeta {
     pub name: String,
     pub sz_decimals: u32,
+    pub max_leverage: u32,
+    pub margin_table_id: u32,
+    pub is_delisted: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
