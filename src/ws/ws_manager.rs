@@ -213,11 +213,38 @@ impl WsManager {
     }
 
     async fn connect(url: &str) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
-        Ok(connect_async(url)
+        let (ws_stream, _) = connect_async(url)
             .await
-            .map_err(|e| Error::Websocket(e.to_string()))?
-            .0)
+            .map_err(|e| Error::Websocket(e.to_string()))?;
+
+        // Set TCP_NODELAY if using plain TCP
+        if let Some(tcp_stream) = Self::get_tcp_stream(&ws_stream) {
+            tcp_stream
+                .set_nodelay(true)
+                .map_err(|e| Error::Websocket(format!("Failed to set TCP_NODELAY: {e}")))?;
+        }
+
+        Ok(ws_stream)
     }
+
+    fn get_tcp_stream(
+        ws_stream: &WebSocketStream<MaybeTlsStream<TcpStream>>,
+    ) -> Option<&TcpStream> {
+        match ws_stream.get_ref() {
+            MaybeTlsStream::Plain(tcp_stream) => Some(tcp_stream),
+            _ => None, // TLS not supported in this case
+        }
+    }
+
+    // fn get_tcp_stream(
+    //     ws_stream: &WebSocketStream<MaybeTlsStream<TcpStream>>,
+    // ) -> Option<&TcpStream> {
+    //     match ws_stream.get_ref() {
+    //         MaybeTlsStream::Plain(tcp_stream) => Some(tcp_stream),
+    //         MaybeTlsStream::Rustls(stream) => Some(stream.get_ref().0),
+    //         MaybeTlsStream::NativeTls(stream) => stream.get_ref().downcast_ref::<TcpStream>(),
+    //     }
+    // }
 
     fn get_identifier(message: &Message) -> Result<String> {
         match message {
