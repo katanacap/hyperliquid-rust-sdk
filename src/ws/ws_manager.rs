@@ -4,13 +4,13 @@ use crate::{
     ActiveAssetCtx, Error, Notification, UserFills, UserFundings, UserNonFundingLedgerUpdates,
     WebData2,
 };
+use futures_util::stream::SplitStream;
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
-use log::{error, info, warn};
+use log::{error, warn};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::BorrowMut,
     collections::HashMap,
-    ops::DerefMut,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -31,16 +31,22 @@ use tokio_tungstenite::{
 
 use ethers::types::H160;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct SubscriptionData {
     sending_channel: UnboundedSender<Message>,
     subscription_id: u32,
     id: String,
 }
+
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct WsManager {
     stop_flag: Arc<AtomicBool>,
     writer: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, protocol::Message>>>,
+    reader: Arc<Mutex<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
+
+    // subscriptions
     subscriptions: Arc<Mutex<HashMap<String, Vec<SubscriptionData>>>>,
     subscription_id: u32,
     subscription_identifiers: HashMap<u32, String>,
@@ -98,114 +104,91 @@ pub(crate) struct Ping {
 }
 
 impl WsManager {
-    const SEND_PING_INTERVAL: u64 = 50;
+    const SEND_PING_INTERVAL: u64 = 15;
 
     pub(crate) async fn new(url: String, reconnect: bool) -> Result<WsManager> {
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        let (writer, mut reader) = Self::connect(&url).await?.split();
-        let writer = Arc::new(Mutex::new(writer));
+        let ws_stream = Self::connect(&url).await?;
+        let (writer_split, reader_split) = ws_stream.split();
+        let writer = Arc::new(Mutex::new(writer_split));
+        let reader = Arc::new(Mutex::new(reader_split));
 
-        let subscriptions_map: HashMap<String, Vec<SubscriptionData>> = HashMap::new();
-        let subscriptions = Arc::new(Mutex::new(subscriptions_map));
-        let subscriptions_copy = Arc::clone(&subscriptions);
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
 
-        {
-            let writer = writer.clone();
-            let stop_flag = Arc::clone(&stop_flag);
-            let reader_fut = async move {
-                while !stop_flag.load(Ordering::Relaxed) {
-                    if let Some(data) = reader.next().await {
+        let reader_clone = Arc::clone(&reader);
+        let writer_clone = Arc::clone(&writer);
+        let subscriptions_clone = Arc::clone(&subscriptions);
+        let stop_flag_clone = Arc::clone(&stop_flag);
+        let url_clone = url.clone();
+
+        spawn(async move {
+            loop {
+                if stop_flag_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let mut reader_lock = reader_clone.lock().await;
+                match reader_lock.next().await {
+                    Some(Ok(msg)) => {
                         if let Err(err) =
-                            WsManager::parse_and_send_data(data, &subscriptions_copy).await
+                            WsManager::parse_and_send_data(Ok(msg), &subscriptions_clone).await
                         {
-                            error!("Error processing data received by WsManager reader: {err}");
+                            error!("Error processing message: {err}");
                         }
-                    } else {
-                        warn!("WsManager disconnected");
-                        if let Err(err) = WsManager::send_to_all_subscriptions(
-                            &subscriptions_copy,
-                            Message::NoData,
-                        )
-                        .await
-                        {
-                            warn!("Error sending disconnection notification err={err}");
-                        }
+                    }
+                    Some(Err(err)) => {
+                        error!("WebSocket error: {err}");
                         if reconnect {
-                            // Always sleep for 1 second before attempting to reconnect so it does not spin during reconnecting. This could be enhanced with exponential backoff.
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            info!("WsManager attempting to reconnect");
-                            match Self::connect(&url).await {
-                                Ok(ws) => {
-                                    let (new_writer, new_reader) = ws.split();
-                                    reader = new_reader;
-                                    let mut writer_guard = writer.lock().await;
-                                    *writer_guard = new_writer;
-                                    for (identifier, v) in subscriptions_copy.lock().await.iter() {
-                                        // TODO should these special keys be removed and instead use the simpler direct identifier mapping?
-                                        if identifier.eq("userEvents")
-                                            || identifier.eq("orderUpdates")
-                                        {
-                                            for subscription_data in v {
-                                                if let Err(err) = Self::subscribe(
-                                                    writer_guard.deref_mut(),
-                                                    &subscription_data.id,
-                                                )
-                                                .await
-                                                {
-                                                    error!(
-                                                        "Could not resubscribe {identifier}: {err}"
-                                                    );
-                                                }
-                                            }
-                                        } else if let Err(err) =
-                                            Self::subscribe(writer_guard.deref_mut(), identifier)
-                                                .await
-                                        {
-                                            error!("Could not resubscribe correctly {identifier}: {err}");
-                                        }
-                                    }
-                                    info!("WsManager reconnect finished");
+                            warn!("Attempting reconnect after error...");
+                            time::sleep(Duration::from_secs(1)).await;
+                            match Self::connect(&url_clone).await {
+                                Ok(new_ws) => {
+                                    let (new_writer, new_reader) = new_ws.split();
+                                    *writer_clone.lock().await = new_writer;
+                                    *reader_clone.lock().await = new_reader;
                                 }
-                                Err(err) => error!("Could not connect to websocket {err}"),
+                                Err(e) => {
+                                    error!("Reconnect failed: {e}");
+                                }
                             }
                         } else {
-                            error!("WsManager reconnection disabled. Will not reconnect and exiting reader task.");
                             break;
                         }
                     }
-                }
-                warn!("ws message reader task stopped");
-            };
-            spawn(reader_fut);
-        }
-
-        {
-            let stop_flag = Arc::clone(&stop_flag);
-            let writer = Arc::clone(&writer);
-            let ping_fut = async move {
-                while !stop_flag.load(Ordering::Relaxed) {
-                    match serde_json::to_string(&Ping { method: "ping" }) {
-                        Ok(payload) => {
-                            let mut writer = writer.lock().await;
-                            if let Err(err) =
-                                writer.send(protocol::Message::Text(payload.into())).await
-                            {
-                                error!("Error pinging server: {err}")
-                            }
-                        }
-                        Err(err) => error!("Error serializing ping message: {err}"),
+                    None => {
+                        warn!("WebSocket connection closed.");
+                        break;
                     }
-                    time::sleep(Duration::from_secs(Self::SEND_PING_INTERVAL)).await;
                 }
-                warn!("ws ping task stopped");
-            };
-            spawn(ping_fut);
-        }
+            }
+        });
+
+        let ping_writer = Arc::clone(&writer);
+        let stop_flag_ping = Arc::clone(&stop_flag);
+        spawn(async move {
+            while !stop_flag_ping.load(Ordering::Relaxed) {
+                match serde_json::to_string(&Ping { method: "ping" }) {
+                    Ok(payload) => {
+                        let mut writer = ping_writer.lock().await;
+                        if let Err(err) = writer.send(protocol::Message::Text(payload.into())).await
+                        {
+                            error!("Error pinging server: {err}");
+                            break; // остановим пинг на ошибке
+                        }
+                    }
+                    Err(err) => {
+                        error!("Failed to serialize ping: {err}");
+                    }
+                }
+                time::sleep(Duration::from_secs(Self::SEND_PING_INTERVAL)).await;
+            }
+        });
 
         Ok(WsManager {
             stop_flag,
             writer,
+            reader,
             subscriptions,
             subscription_id: 0,
             subscription_identifiers: HashMap::new(),
@@ -217,13 +200,11 @@ impl WsManager {
             .await
             .map_err(|e| Error::Websocket(e.to_string()))?;
 
-        // Set TCP_NODELAY if using plain TCP
         if let Some(tcp_stream) = Self::get_tcp_stream(&ws_stream) {
             tcp_stream
                 .set_nodelay(true)
                 .map_err(|e| Error::Websocket(format!("Failed to set TCP_NODELAY: {e}")))?;
         }
-
         Ok(ws_stream)
     }
 
