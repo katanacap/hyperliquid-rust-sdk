@@ -13,7 +13,7 @@ repository = "https://github.com/hyperliquid-dex/hyperliquid-rust-sdk"
 
 [dependencies]
 tokio = { version = "1.45.1", features = ["full"] }
-tokio-tungstenite = { version = "0.26.2", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
 
 chrono = "0.4.41"
 env_logger = "0.11.8"
