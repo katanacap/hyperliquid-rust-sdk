@@ -107,7 +107,7 @@ pub(crate) struct Ping {
 }
 
 impl WsManager {
-    const SEND_PING_INTERVAL: u64 = 50;
+    const SEND_PING_INTERVAL: u64 = 25;
 
     pub(crate) async fn new(url: String, reconnect: bool) -> Result<WsManager> {
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -197,7 +197,7 @@ impl WsManager {
                     match serde_json::to_string(&Ping { method: "ping" }) {
                         Ok(payload) => {
                             let mut writer = writer.lock().await;
-                            if let Err(err) = writer.send(protocol::Message::Text(payload)).await {
+                            if let Err(err) = writer.send(protocol::Message::Text(payload.into())).await {
                                 error!("Error pinging server: {err}")
                             }
                         }
@@ -384,7 +384,7 @@ impl WsManager {
         .map_err(|e| Error::JsonParse(e.to_string()))?;
 
         writer
-            .send(protocol::Message::Text(payload))
+            .send(protocol::Message::Text(payload.into()))
             .await
             .map_err(|e| Error::Websocket(e.to_string()))?;
         Ok(())
